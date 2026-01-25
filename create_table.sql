@@ -6,6 +6,7 @@ CREATE TABLE codetime_entries (
     query JSON,
     request_headers JSON,
     request_body JSON,
+    language TEXT,
     response_status INTEGER NOT NULL,
     response_headers JSON,
     response_body JSON,

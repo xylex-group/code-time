@@ -96,6 +96,7 @@ class LogEntry:
     event_time: Optional[datetime]
     absolute_filepath: Optional[str]
     event_type: Optional[str]
+    language: Optional[str]
 
     @classmethod
     def create(
@@ -122,6 +123,7 @@ class LogEntry:
         event_time: Optional[datetime],
         absolute_filepath: Optional[str],
         event_type: Optional[str],
+        language: Optional[str],
     ) -> "LogEntry":
         payload = json.dumps(
             {
@@ -160,6 +162,7 @@ class LogEntry:
             event_time=event_time,
             absolute_filepath=absolute_filepath,
             event_type=event_type,
+            language=language,
         )
 
     def to_json_line(self) -> str:
@@ -233,8 +236,9 @@ class DatabaseStorage:
                 event_time,
                 absolute_filepath,
                 event_type,
+                language,
                 recorded_at
-            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
             ON CONFLICT (row_hash) DO NOTHING
             """,
             entry.row_hash,
@@ -260,6 +264,7 @@ class DatabaseStorage:
             entry.event_time,
             entry.absolute_filepath,
             entry.event_type,
+            entry.language,
             datetime.utcnow(),
             )
         except Exception as exc:  # pragma: no cover
@@ -368,6 +373,7 @@ def collect_metadata(body: str, headers: Mapping[str, str]) -> Dict[str, Any]:
         "event_time": event_time,
         "absolute_filepath": absolute_file,
         "event_type": data.get("eventType") or data.get("event_type"),
+        "language": data.get("language"),
     }
 
 
