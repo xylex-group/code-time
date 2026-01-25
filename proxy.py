@@ -389,6 +389,9 @@ def filter_response_headers(headers: Mapping[str, str]) -> Dict[str, str]:
 @app.api_route("/{path:path}", methods=ALLOWED_METHODS)
 async def proxy(path: str, request: Request) -> Response:
     client: Optional[httpx.AsyncClient] = getattr(app.state, "client")
+    user_agent_header = request.headers.get("user-agent", "")
+    if "CodeTime Client" not in user_agent_header:
+        return Response(status_code=403, content=b"Unsupported client")
     storage: LogStorage = app.state.storage
     database: DatabaseStorage = app.state.database
     printer: AnsiPrinter = app.state.printer

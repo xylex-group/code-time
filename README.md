@@ -56,3 +56,4 @@ Point your CodeTime client (or a curl command) at `http://localhost:9492` follow
 
 - The proxy implements the GET `/v3/users/self/minutes` and POST `/v3/users/event-log` paths (among others) because it captures everything and forwards it transparently.
 - This setup can be extended with extra filters or saved analytics as needed.
+- The proxy only forwards requests whose `User-Agent` includes `CodeTime Client`; other requests return `403` immediately.
