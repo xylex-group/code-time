@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
@@ -83,6 +84,18 @@ class LogEntry:
     duration_ms: float
     row_hash: str
     auth_header: str
+    client_ip: Optional[str]
+    user_agent: Optional[str]
+    windows_username: Optional[str]
+    file_extension: Optional[str]
+    operation_type: Optional[str]
+    git_branch: Optional[str]
+    project: Optional[str]
+    editor: Optional[str]
+    platform: Optional[str]
+    event_time: Optional[datetime]
+    absolute_filepath: Optional[str]
+    event_type: Optional[str]
 
     @classmethod
     def create(
@@ -97,6 +110,18 @@ class LogEntry:
         response_body: str,
         duration_ms: float,
         auth_header: str,
+        client_ip: Optional[str],
+        user_agent: Optional[str],
+        windows_username: Optional[str],
+        file_extension: Optional[str],
+        operation_type: Optional[str],
+        git_branch: Optional[str],
+        project: Optional[str],
+        editor: Optional[str],
+        platform: Optional[str],
+        event_time: Optional[datetime],
+        absolute_filepath: Optional[str],
+        event_type: Optional[str],
     ) -> "LogEntry":
         payload = json.dumps(
             {
@@ -123,10 +148,25 @@ class LogEntry:
             duration_ms=duration_ms,
             row_hash=row_hash,
             auth_header=auth_header,
+            client_ip=client_ip,
+            user_agent=user_agent,
+            windows_username=windows_username,
+            file_extension=file_extension,
+            operation_type=operation_type,
+            git_branch=git_branch,
+            project=project,
+            editor=editor,
+            platform=platform,
+            event_time=event_time,
+            absolute_filepath=absolute_filepath,
+            event_type=event_type,
         )
 
     def to_json_line(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False)
+        serializable = asdict(self)
+        if self.event_time:
+            serializable["event_time"] = self.event_time.isoformat()
+        return json.dumps(serializable, ensure_ascii=False)
 
 
 class LogStorage:
@@ -168,35 +208,59 @@ class DatabaseStorage:
             return
         try:
             await self.pool.execute(
-                """
-                INSERT INTO codetime_entries(
-                    row_hash,
-                    method,
-                    path,
-                    query,
-                    request_headers,
-                    request_body,
-                    response_status,
-                    response_headers,
-                    response_body,
-                    duration_ms,
-                    auth_header,
-                    recorded_at
-                ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-                ON CONFLICT (row_hash) DO NOTHING
-                """,
-                entry.row_hash,
-                entry.method,
-                entry.path,
-                json.dumps(entry.query, ensure_ascii=False),
-                json.dumps(entry.request_headers, ensure_ascii=False),
-                json.dumps(entry.request_body, ensure_ascii=True),
-                entry.response_status,
-                json.dumps(entry.response_headers, ensure_ascii=False),
-                json.dumps(entry.response_body, ensure_ascii=True),
-                entry.duration_ms,
-                entry.auth_header,
-                datetime.utcnow(),
+            """
+            INSERT INTO codetime_entries(
+                row_hash,
+                method,
+                path,
+                query,
+                request_headers,
+                request_body,
+                response_status,
+                response_headers,
+                response_body,
+                duration_ms,
+                auth_header,
+                client_ip,
+                user_agent,
+                windows_username,
+                file_extension,
+                operation_type,
+                git_branch,
+                project,
+                editor,
+                platform,
+                event_time,
+                absolute_filepath,
+                event_type,
+                recorded_at
+            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+            ON CONFLICT (row_hash) DO NOTHING
+            """,
+            entry.row_hash,
+            entry.method,
+            entry.path,
+            json.dumps(entry.query, ensure_ascii=False),
+            json.dumps(entry.request_headers, ensure_ascii=False),
+            json.dumps(entry.request_body, ensure_ascii=True),
+            entry.response_status,
+            json.dumps(entry.response_headers, ensure_ascii=False),
+            json.dumps(entry.response_body, ensure_ascii=True),
+            entry.duration_ms,
+            entry.auth_header,
+            entry.client_ip,
+            entry.user_agent,
+            entry.windows_username,
+            entry.file_extension,
+            entry.operation_type,
+            entry.git_branch,
+            entry.project,
+            entry.editor,
+            entry.platform,
+            entry.event_time,
+            entry.absolute_filepath,
+            entry.event_type,
+            datetime.utcnow(),
             )
         except Exception as exc:  # pragma: no cover
             logger.exception("failed to insert entry into Postgres")
@@ -230,6 +294,80 @@ def truncate_preview(value: str, length: int = 400) -> str:
 
 def format_headers(headers: Mapping[str, str]) -> str:
     return ", ".join(f"{k}: {v}" for k, v in headers.items())
+
+
+_IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+
+
+def extract_client_ip(headers: Mapping[str, str]) -> Optional[str]:
+    candidates = []
+    for key in ("x-real-ip", "x-forwarded-for", "x-forwarded"):
+        value = headers.get(key)
+        if not value:
+            continue
+        candidates.extend(part.strip() for part in value.split(","))
+
+    for ip in candidates:
+        if _IPV4_RE.fullmatch(ip):
+            return ip
+    host = headers.get("host")
+    if host and _IPV4_RE.fullmatch(host):
+        return host
+    return None
+
+
+def extract_user_agent(headers: Mapping[str, str]) -> Optional[str]:
+    return headers.get("user-agent")
+
+
+def extract_windows_username(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    match = re.search(r"[cC]:\\Users\\([^\\]+)\\", path)
+    if match:
+        return match.group(1)
+    return None
+
+
+def extract_file_extension(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    _, ext = os.path.splitext(path)
+    return ext.lower() if ext else None
+
+
+def parse_body_json(body: str) -> Dict[str, Any]:
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return {}
+
+
+def collect_metadata(body: str, headers: Mapping[str, str]) -> Dict[str, Any]:
+    data = parse_body_json(body)
+    absolute_file = data.get("absoluteFile") or data.get("absolute_filepath")
+    event_time_value = data.get("eventTime")
+    event_time = None
+    if isinstance(event_time_value, (int, float)):
+        try:
+            event_time = datetime.utcfromtimestamp(event_time_value / 1000.0)
+        except Exception:
+            event_time = None
+
+    return {
+        "client_ip": extract_client_ip(headers),
+        "user_agent": extract_user_agent(headers),
+        "windows_username": extract_windows_username(absolute_file),
+        "file_extension": extract_file_extension(absolute_file),
+        "operation_type": data.get("operationType") or data.get("operation_type"),
+        "git_branch": data.get("gitBranch") or data.get("git_branch"),
+        "project": data.get("project"),
+        "editor": data.get("editor"),
+        "platform": data.get("platform"),
+        "event_time": event_time,
+        "absolute_filepath": absolute_file,
+        "event_type": data.get("eventType") or data.get("event_type"),
+    }
 
 
 def build_target_url(path: str) -> str:
@@ -273,6 +411,7 @@ async def proxy(path: str, request: Request) -> Response:
     duration_ms = (time.perf_counter() - start) * 1000
 
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    metadata = collect_metadata(request_body, request.headers)
 
     entry = LogEntry.create(
         method=request.method,
@@ -285,6 +424,7 @@ async def proxy(path: str, request: Request) -> Response:
         response_body=upstream_response.text,
         duration_ms=duration_ms,
         auth_header=auth_header,
+        **metadata,
     )
 
     tasks = [storage.append(entry)]

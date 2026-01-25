@@ -49,8 +49,8 @@ Point your CodeTime client (or a curl command) at `http://localhost:9492` follow
 
 ## Database schema
 
-- Run `psql -f create_table.sql` to create the `codetime_entries` table before starting the proxy (it now stores header/body fields as `JSON`).
-- Each row stores the JSON payload plus HTTP metadata and enforces uniqueness via `row_hash`.
+- Run `psql -f create_table.sql` to create the `codetime_entries` table before starting the proxy (it now stores headers/body as `JSON` plus extracted metadata).
+- Each row stores the JSON payload plus HTTP metadata and enforces uniqueness via `row_hash`. The table now captures `client_ip`, `user_agent`, `windows_username`, `file_extension`, `operation_type`, `git_branch`, `project`, `editor`, `platform`, `event_time`, `absolute_filepath`, and `event_type`.
 
 ## Notes
 

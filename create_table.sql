@@ -11,5 +11,17 @@ CREATE TABLE codetime_entries (
     response_body JSON,
     duration_ms DOUBLE PRECISION NOT NULL,
     auth_header TEXT,
+    client_ip TEXT,
+    user_agent TEXT,
+    windows_username TEXT,
+    file_extension TEXT,
+    operation_type TEXT,
+    git_branch TEXT,
+    project TEXT,
+    editor TEXT,
+    platform TEXT,
+    event_time TIMESTAMPTZ,
+    absolute_filepath TEXT,
+    event_type TEXT,
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
