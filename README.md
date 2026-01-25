@@ -26,6 +26,12 @@ Start the proxy with Uvicorn. By default it listens on port 9492:
 uvicorn proxy:app --host 0.0.0.0 --port 9492
 ```
 
+Or run the module directly; it will launch Uvicorn for you using the same defaults:
+
+```bash
+python proxy.py
+```
+
 Point your CodeTime client (or a curl command) at `http://localhost:9492` followed by the usual `/v3/...` path. The proxy forwards every request to `https://api.codetime.dev` (or the upstream override) and streams the response back to the client.
 
 ## Logging & persistence
@@ -39,6 +45,7 @@ Point your CodeTime client (or a curl command) at `http://localhost:9492` follow
 - Set `CODETIME_UPSTREAM` to override the target host (defaults to `https://api.codetime.dev`).
 - Set `CODETIME_LOG_DIR` to change where the JSON log file is written (`logs/` by default).
 - Set `PG_URL` via `.env` to enable Postgres inserts.
+- Set `CODETIME_PORT` (or `PORT`) if you want a different port when running `python proxy.py`.
 
 ## Database schema
 

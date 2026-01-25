@@ -19,6 +19,7 @@ import httpx
 from colorama import Fore, Style, init as colorama_init
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
+import uvicorn
 
 APP_TITLE = "CodeTime Proxy"
 DEFAULT_UPSTREAM = "https://api.codetime.dev"
@@ -292,3 +293,8 @@ async def proxy(path: str, request: Request) -> Response:
         headers=filter_response_headers(upstream_response.headers),
         media_type=upstream_response.headers.get("content-type"),
     )
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("CODETIME_PORT", "9492"))
+    uvicorn.run("proxy:app", host="0.0.0.0", port=port, log_level="info")
