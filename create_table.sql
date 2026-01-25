@@ -5,7 +5,7 @@ CREATE TABLE codetime_entries (
     path TEXT NOT NULL,
     query JSONB,
     request_headers JSONB,
-    request_body JSONB,
+    request_body TEXT,
     response_status INTEGER NOT NULL,
     response_headers JSONB,
     response_body TEXT,
