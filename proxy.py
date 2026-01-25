@@ -3,17 +3,20 @@ CodeTime proxy that forwards requests while logging activity with ANSI colors.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlencode, urlparse
 
+import asyncpg
 import httpx
 from colorama import Fore, Style, init as colorama_init
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 
 APP_TITLE = "CodeTime Proxy"
@@ -21,11 +24,24 @@ DEFAULT_UPSTREAM = "https://api.codetime.dev"
 ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
 
 colorama_init(autoreset=True)
+load_dotenv()
 
-UPSTREAM_BASE = os.environ.get("CODETIME_UPSTREAM", DEFAULT_UPSTREAM).rstrip("/")
-LOG_DIR = Path(os.environ.get("CODETIME_LOG_DIR", "logs"))
-JSON_LOG_PATH = LOG_DIR / "traffic.jsonl"
 
+@dataclass(frozen=True)
+class ProxyConfig:
+    upstream: str
+    log_dir: Path
+    pg_url: Optional[str]
+
+
+def load_config() -> ProxyConfig:
+    upstream = os.environ.get("CODETIME_UPSTREAM", DEFAULT_UPSTREAM).rstrip("/")
+    log_dir = Path(os.environ.get("CODETIME_LOG_DIR", "logs"))
+    pg_url = os.environ.get("PG_URL")
+    return ProxyConfig(upstream=upstream, log_dir=log_dir, pg_url=pg_url)
+
+
+config = load_config()
 app = FastAPI(title=APP_TITLE)
 
 
@@ -41,10 +57,49 @@ class LogEntry:
     response_headers: Dict[str, str]
     response_body: str
     duration_ms: float
+    row_hash: str
+
+    @classmethod
+    def create(
+        cls,
+        method: str,
+        path: str,
+        query: Dict[str, str],
+        request_headers: Dict[str, str],
+        request_body: str,
+        response_status: int,
+        response_headers: Dict[str, str],
+        response_body: str,
+        duration_ms: float,
+    ) -> "LogEntry":
+        payload = json.dumps(
+            {
+                "method": method,
+                "path": path,
+                "query": query,
+                "request_body": request_body,
+                "response_status": response_status,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        row_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return cls(
+            timestamp=datetime.utcnow().isoformat() + "Z",
+            method=method,
+            path=path,
+            query=query,
+            request_headers=request_headers,
+            request_body=request_body,
+            response_status=response_status,
+            response_headers=response_headers,
+            response_body=response_body,
+            duration_ms=duration_ms,
+            row_hash=row_hash,
+        )
 
     def to_json_line(self) -> str:
-        serialized = asdict(self)
-        return json.dumps(serialized, ensure_ascii=False)
+        return json.dumps(asdict(self), ensure_ascii=False)
 
 
 class LogStorage:
@@ -61,6 +116,58 @@ class LogStorage:
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(line)
             handle.write("\n")
+
+
+class DatabaseStorage:
+    def __init__(self, dsn: Optional[str]) -> None:
+        self.dsn = dsn
+        self.pool: Optional[asyncpg.Pool] = None
+
+    async def initialize(self) -> None:
+        if not self.dsn:
+            return
+        self.pool = await asyncpg.create_pool(
+            dsn=self.dsn,
+            min_size=1,
+            max_size=4,
+        )
+
+    async def close(self) -> None:
+        if self.pool:
+            await self.pool.close()
+
+    async def insert_entry(self, entry: LogEntry) -> None:
+        if self.pool is None:
+            return
+        await self.pool.execute(
+            """
+            INSERT INTO codetime_entries(
+                row_hash,
+                method,
+                path,
+                query,
+                request_headers,
+                request_body,
+                response_status,
+                response_headers,
+                response_body,
+                duration_ms,
+                recorded_at
+            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            ON CONFLICT (row_hash) DO NOTHING
+            """,
+            entry.row_hash,
+            entry.method,
+            entry.path,
+            json.dumps(entry.query, ensure_ascii=False),
+            json.dumps(entry.request_headers, ensure_ascii=False),
+            entry.request_body,
+            entry.response_status,
+            json.dumps(entry.response_headers, ensure_ascii=False),
+            entry.response_body,
+            entry.duration_ms,
+            datetime.utcnow(),
+        )
 
 
 class AnsiPrinter:
@@ -94,12 +201,12 @@ def format_headers(headers: Mapping[str, str]) -> str:
 
 
 def build_target_url(path: str) -> str:
-    return f"{UPSTREAM_BASE}/{path.lstrip('/')}"
+    return f"{config.upstream}/{path.lstrip('/')}"
 
 
 def build_request_headers(original: Mapping[str, str]) -> Dict[str, str]:
     sanitized = {k: v for k, v in original.items() if k.lower() != "host"}
-    netloc = urlparse(UPSTREAM_BASE).netloc
+    netloc = urlparse(config.upstream).netloc
     sanitized["host"] = netloc
     return sanitized
 
@@ -112,7 +219,9 @@ def filter_response_headers(headers: Mapping[str, str]) -> Dict[str, str]:
 @app.on_event("startup")
 async def on_startup() -> None:
     app.state.client = httpx.AsyncClient(timeout=30.0)
-    app.state.storage = LogStorage(JSON_LOG_PATH)
+    app.state.storage = LogStorage(config.log_dir / "traffic.jsonl")
+    app.state.database = DatabaseStorage(config.pg_url)
+    await app.state.database.initialize()
     app.state.printer = AnsiPrinter()
 
 
@@ -121,12 +230,15 @@ async def on_shutdown() -> None:
     client: Optional[httpx.AsyncClient] = getattr(app.state, "client", None)
     if client:
         await client.aclose()
+    db: DatabaseStorage = getattr(app.state, "database")
+    await db.close()
 
 
 @app.api_route("/{path:path}", methods=ALLOWED_METHODS)
 async def proxy(path: str, request: Request) -> Response:
-    client: Optional[httpx.AsyncClient] = getattr(app.state, "client", None)
+    client: Optional[httpx.AsyncClient] = getattr(app.state, "client")
     storage: LogStorage = app.state.storage
+    database: DatabaseStorage = app.state.database
     printer: AnsiPrinter = app.state.printer
 
     if client is None:
@@ -146,8 +258,7 @@ async def proxy(path: str, request: Request) -> Response:
     )
     duration_ms = (time.perf_counter() - start) * 1000
 
-    entry = LogEntry(
-        timestamp=datetime.utcnow().isoformat() + "Z",
+    entry = LogEntry.create(
         method=request.method,
         path=request.url.path,
         query=params,
@@ -159,7 +270,10 @@ async def proxy(path: str, request: Request) -> Response:
         duration_ms=duration_ms,
     )
 
-    await storage.append(entry)
+    await asyncio.gather(
+        storage.append(entry),
+        database.insert_entry(entry),
+    )
     printer.print(entry)
 
     return Response(

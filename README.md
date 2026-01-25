@@ -13,6 +13,10 @@ This repository runs a lightweight Python proxy that mirrors the CodeTime client
    ```bash
    pip install -r requirements.txt
    ```
+3. Copy `.env.example` to `.env` and set your `PG_URL` plus any overrides (`CODETIME_UPSTREAM`, `CODETIME_LOG_DIR`):
+   ```bash
+   cp .env.example .env
+   ```
 
 ## Running
 
@@ -26,14 +30,20 @@ Point your CodeTime client (or a curl command) at `http://localhost:9492` follow
 
 ## Logging & persistence
 
-- All requests/responses are printed to the terminal with ANSI colors (cyan for requests, green for responses) to make the flow easy to scan.
-- The proxy persists each interaction in `logs/traffic.jsonl` (one JSON object per line) so downstream tooling can process the stream cheaply.
-- The `logs/` directory is created automatically and is ignored by Git via `.gitignore`.
+- All requests/responses are printed to the terminal with ANSI colors (cyan for requests, green for responses).
+- Every interaction is persisted to `logs/traffic.jsonl` (one JSON object per line) and is tagged with a `row_hash`.
+- When `PG_URL` is defined in your `.env`, the proxy also inserts each entry into the `codetime_entries` table.
 
 ## Configuration
 
 - Set `CODETIME_UPSTREAM` to override the target host (defaults to `https://api.codetime.dev`).
 - Set `CODETIME_LOG_DIR` to change where the JSON log file is written (`logs/` by default).
+- Set `PG_URL` via `.env` to enable Postgres inserts.
+
+## Database schema
+
+- Run `psql -f create_table.sql` to create the `codetime_entries` table before starting the proxy.
+- Each row stores the JSON payload plus HTTP metadata and enforces uniqueness via `row_hash`.
 
 ## Notes
 
