@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +43,26 @@ def load_config() -> ProxyConfig:
 
 
 config = load_config()
-app = FastAPI(title=APP_TITLE)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.client = httpx.AsyncClient(timeout=30.0)
+    app.state.storage = LogStorage(config.log_dir / "traffic.jsonl")
+    app.state.database = DatabaseStorage(config.pg_url)
+    await app.state.database.initialize()
+    app.state.printer = AnsiPrinter()
+    try:
+        yield
+    finally:
+        client: Optional[httpx.AsyncClient] = getattr(app.state, "client", None)
+        if client:
+            await client.aclose()
+        db: DatabaseStorage = getattr(app.state, "database")
+        await db.close()
+
+
+app = FastAPI(title=APP_TITLE, lifespan=lifespan)
 
 
 @dataclass(frozen=True)
@@ -58,6 +78,7 @@ class LogEntry:
     response_body: str
     duration_ms: float
     row_hash: str
+    authorization: str
 
     @classmethod
     def create(
@@ -71,6 +92,7 @@ class LogEntry:
         response_headers: Dict[str, str],
         response_body: str,
         duration_ms: float,
+        authorization: str,
     ) -> "LogEntry":
         payload = json.dumps(
             {
@@ -96,6 +118,7 @@ class LogEntry:
             response_body=response_body,
             duration_ms=duration_ms,
             row_hash=row_hash,
+            authorization=authorization,
         )
 
     def to_json_line(self) -> str:
@@ -152,8 +175,9 @@ class DatabaseStorage:
                 response_headers,
                 response_body,
                 duration_ms,
+                authorization,
                 recorded_at
-            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT (row_hash) DO NOTHING
             """,
             entry.row_hash,
@@ -166,6 +190,7 @@ class DatabaseStorage:
             json.dumps(entry.response_headers, ensure_ascii=False),
             entry.response_body,
             entry.duration_ms,
+            entry.authorization,
             datetime.utcnow(),
         )
 
@@ -216,24 +241,6 @@ def filter_response_headers(headers: Mapping[str, str]) -> Dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in forbidden}
 
 
-@app.on_event("startup")
-async def on_startup() -> None:
-    app.state.client = httpx.AsyncClient(timeout=30.0)
-    app.state.storage = LogStorage(config.log_dir / "traffic.jsonl")
-    app.state.database = DatabaseStorage(config.pg_url)
-    await app.state.database.initialize()
-    app.state.printer = AnsiPrinter()
-
-
-@app.on_event("shutdown")
-async def on_shutdown() -> None:
-    client: Optional[httpx.AsyncClient] = getattr(app.state, "client", None)
-    if client:
-        await client.aclose()
-    db: DatabaseStorage = getattr(app.state, "database")
-    await db.close()
-
-
 @app.api_route("/{path:path}", methods=ALLOWED_METHODS)
 async def proxy(path: str, request: Request) -> Response:
     client: Optional[httpx.AsyncClient] = getattr(app.state, "client")
@@ -258,6 +265,8 @@ async def proxy(path: str, request: Request) -> Response:
     )
     duration_ms = (time.perf_counter() - start) * 1000
 
+    authorization = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+
     entry = LogEntry.create(
         method=request.method,
         path=request.url.path,
@@ -268,6 +277,7 @@ async def proxy(path: str, request: Request) -> Response:
         response_headers=dict(upstream_response.headers),
         response_body=upstream_response.text,
         duration_ms=duration_ms,
+        authorization=authorization,
     )
 
     await asyncio.gather(

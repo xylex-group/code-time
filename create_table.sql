@@ -10,5 +10,6 @@ CREATE TABLE codetime_entries (
     response_headers JSONB,
     response_body TEXT,
     duration_ms DOUBLE PRECISION NOT NULL,
+    authorization TEXT,
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
