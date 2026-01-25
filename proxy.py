@@ -107,7 +107,7 @@ class LogEntry:
             ensure_ascii=False,
         )
         row_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-        return cls(
+            return cls(
             timestamp=datetime.utcnow().isoformat() + "Z",
             method=method,
             path=path,
@@ -119,7 +119,7 @@ class LogEntry:
             response_body=response_body,
             duration_ms=duration_ms,
             row_hash=row_hash,
-            auth_header=authorization,
+            auth_header=auth_header,
         )
 
     def to_json_line(self) -> str:
