@@ -79,7 +79,7 @@ class LogEntry:
     response_body: str
     duration_ms: float
     row_hash: str
-    authorization: str
+    auth_header: str
 
     @classmethod
     def create(
@@ -93,7 +93,7 @@ class LogEntry:
         response_headers: Dict[str, str],
         response_body: str,
         duration_ms: float,
-        authorization: str,
+        auth_header: str,
     ) -> "LogEntry":
         payload = json.dumps(
             {
@@ -119,7 +119,7 @@ class LogEntry:
             response_body=response_body,
             duration_ms=duration_ms,
             row_hash=row_hash,
-            authorization=authorization,
+            auth_header=authorization,
         )
 
     def to_json_line(self) -> str:
@@ -176,7 +176,7 @@ class DatabaseStorage:
                 response_headers,
                 response_body,
                 duration_ms,
-                authorization,
+                auth_header,
                 recorded_at
             ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT (row_hash) DO NOTHING
@@ -191,7 +191,7 @@ class DatabaseStorage:
             json.dumps(entry.response_headers, ensure_ascii=False),
             entry.response_body,
             entry.duration_ms,
-            entry.authorization,
+            entry.auth_header,
             datetime.utcnow(),
         )
 
@@ -266,7 +266,7 @@ async def proxy(path: str, request: Request) -> Response:
     )
     duration_ms = (time.perf_counter() - start) * 1000
 
-    authorization = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
 
     entry = LogEntry.create(
         method=request.method,
@@ -278,7 +278,7 @@ async def proxy(path: str, request: Request) -> Response:
         response_headers=dict(upstream_response.headers),
         response_body=upstream_response.text,
         duration_ms=duration_ms,
-        authorization=authorization,
+        auth_header=auth_header,
     )
 
     await asyncio.gather(

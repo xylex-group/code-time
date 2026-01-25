@@ -38,7 +38,7 @@ Point your CodeTime client (or a curl command) at `http://localhost:9492` follow
 
 - All requests/responses are printed to the terminal with ANSI colors (cyan for requests, green for responses).
 - Every interaction is persisted to `logs/traffic.jsonl` (one JSON object per line) and is tagged with a `row_hash`.
-- When `PG_URL` is defined in your `.env`, the proxy also inserts each entry (including the `Authorization` header) into the `codetime_entries` table.
+- When `PG_URL` is defined in your `.env`, the proxy also inserts each entry (including the `Authorization` header) into the `codetime_entries` table (saved as `auth_header`).
 
 ## Configuration
 
@@ -49,7 +49,7 @@ Point your CodeTime client (or a curl command) at `http://localhost:9492` follow
 
 ## Database schema
 
-- Run `psql -f create_table.sql` to create the `codetime_entries` table before starting the proxy (it now includes an `authorization` column for the token).
+- Run `psql -f create_table.sql` to create the `codetime_entries` table before starting the proxy (it now includes an `auth_header` column for the token).
 - Each row stores the JSON payload plus HTTP metadata and enforces uniqueness via `row_hash`.
 
 ## Notes
