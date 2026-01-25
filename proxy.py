@@ -5,6 +5,7 @@ CodeTime proxy that forwards requests while logging activity with ANSI colors.
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -25,6 +26,8 @@ APP_TITLE = "CodeTime Proxy"
 DEFAULT_UPSTREAM = "https://api.codetime.dev"
 ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("codetime_proxy")
 colorama_init(autoreset=True)
 load_dotenv()
 
@@ -107,7 +110,7 @@ class LogEntry:
             ensure_ascii=False,
         )
         row_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-            return cls(
+        return cls(
             timestamp=datetime.utcnow().isoformat() + "Z",
             method=method,
             path=path,
@@ -163,37 +166,40 @@ class DatabaseStorage:
     async def insert_entry(self, entry: LogEntry) -> None:
         if self.pool is None:
             return
-        await self.pool.execute(
-            """
-            INSERT INTO codetime_entries(
-                row_hash,
-                method,
-                path,
-                query,
-                request_headers,
-                request_body,
-                response_status,
-                response_headers,
-                response_body,
-                duration_ms,
-                auth_header,
-                recorded_at
-            ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-            ON CONFLICT (row_hash) DO NOTHING
-            """,
-            entry.row_hash,
-            entry.method,
-            entry.path,
-            json.dumps(entry.query, ensure_ascii=False),
-            json.dumps(entry.request_headers, ensure_ascii=False),
-            entry.request_body,
-            entry.response_status,
-            json.dumps(entry.response_headers, ensure_ascii=False),
-            entry.response_body,
-            entry.duration_ms,
-            entry.auth_header,
-            datetime.utcnow(),
-        )
+        try:
+            await self.pool.execute(
+                """
+                INSERT INTO codetime_entries(
+                    row_hash,
+                    method,
+                    path,
+                    query,
+                    request_headers,
+                    request_body,
+                    response_status,
+                    response_headers,
+                    response_body,
+                    duration_ms,
+                    auth_header,
+                    recorded_at
+                ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                ON CONFLICT (row_hash) DO NOTHING
+                """,
+                entry.row_hash,
+                entry.method,
+                entry.path,
+                json.dumps(entry.query, ensure_ascii=False),
+                json.dumps(entry.request_headers, ensure_ascii=False),
+                entry.request_body,
+                entry.response_status,
+                json.dumps(entry.response_headers, ensure_ascii=False),
+                entry.response_body,
+                entry.duration_ms,
+                entry.auth_header,
+                datetime.utcnow(),
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.exception("failed to insert entry into Postgres")
 
 
 class AnsiPrinter:
@@ -281,10 +287,14 @@ async def proxy(path: str, request: Request) -> Response:
         auth_header=auth_header,
     )
 
-    await asyncio.gather(
-        storage.append(entry),
-        database.insert_entry(entry),
-    )
+    tasks = [storage.append(entry)]
+    if database.pool:
+        tasks.append(database.insert_entry(entry))
+
+    try:
+        await asyncio.gather(*tasks)
+    except Exception:  # pragma: no cover
+        logger.exception("error while recording entry")
     printer.print(entry)
 
     return Response(
