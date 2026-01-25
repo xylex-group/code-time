@@ -22,13 +22,18 @@ Start the proxy with Uvicorn. By default it listens on port 9492:
 uvicorn proxy:app --host 0.0.0.0 --port 9492
 ```
 
-Point your CodeTime client (or a curl command) at `http://localhost:8000` followed by the usual `/v3/...` path. The proxy will forward every request to `https://api.codetime.dev` and stream the upstream response back to the client.
+Point your CodeTime client (or a curl command) at `http://localhost:9492` followed by the usual `/v3/...` path. The proxy forwards every request to `https://api.codetime.dev` (or the upstream override) and streams the response back to the client.
 
 ## Logging & persistence
 
 - All requests/responses are printed to the terminal with ANSI colors (cyan for requests, green for responses) to make the flow easy to scan.
-- The proxy persists each interaction in `logs/traffic.jsonl` (JSON lines) and `logs/traffic.csv`. The CSV includes request/response headers, bodies, status, and timing metadata.
+- The proxy persists each interaction in `logs/traffic.jsonl` (one JSON object per line) so downstream tooling can process the stream cheaply.
 - The `logs/` directory is created automatically and is ignored by Git via `.gitignore`.
+
+## Configuration
+
+- Set `CODETIME_UPSTREAM` to override the target host (defaults to `https://api.codetime.dev`).
+- Set `CODETIME_LOG_DIR` to change where the JSON log file is written (`logs/` by default).
 
 ## Notes
 
