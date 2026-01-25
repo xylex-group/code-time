@@ -297,6 +297,7 @@ def format_headers(headers: Mapping[str, str]) -> str:
 
 
 _IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+_JSON_SANITIZE_RE = re.compile(r"[^\x09\x0A\x0D\x20-\x7E]+")
 
 
 def extract_client_ip(headers: Mapping[str, str]) -> Optional[str]:
@@ -370,6 +371,15 @@ def collect_metadata(body: str, headers: Mapping[str, str]) -> Dict[str, Any]:
     }
 
 
+def sanitize_json_text(text: str) -> str:
+    cleaned = _JSON_SANITIZE_RE.sub("", text)
+    try:
+        json.loads(cleaned)
+        return cleaned
+    except json.JSONDecodeError:
+        return cleaned
+
+
 def build_target_url(path: str) -> str:
     return f"{config.upstream}/{path.lstrip('/')}"
 
@@ -413,6 +423,10 @@ async def proxy(path: str, request: Request) -> Response:
     )
     duration_ms = (time.perf_counter() - start) * 1000
 
+    raw_response_text = upstream_response.text
+    sanitized_response_text = sanitize_json_text(raw_response_text)
+    response_bytes = sanitized_response_text.encode("utf-8")
+
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     metadata = collect_metadata(request_body, request.headers)
 
@@ -424,7 +438,7 @@ async def proxy(path: str, request: Request) -> Response:
         request_body=request_body,
         response_status=upstream_response.status_code,
         response_headers=dict(upstream_response.headers),
-        response_body=upstream_response.text,
+        response_body=sanitized_response_text,
         duration_ms=duration_ms,
         auth_header=auth_header,
         **metadata,
@@ -441,7 +455,7 @@ async def proxy(path: str, request: Request) -> Response:
     printer.print(entry)
 
     return Response(
-        content=upstream_response.content,
+        content=response_bytes,
         status_code=upstream_response.status_code,
         headers=filter_response_headers(upstream_response.headers),
         media_type=upstream_response.headers.get("content-type"),
