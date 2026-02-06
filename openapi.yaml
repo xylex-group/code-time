@@ -1,0 +1,273 @@
+openapi: 3.1.0
+info:
+  title: CodeTime Proxy API (minutes)
+  version: 1.0.0
+  description: >
+    Mirrors the `/v3/users/self/minutes` endpoint that CodeTime clients call.
+servers:
+  - url: https://codetime.xbp.app
+paths:
+  /v3/users/self/minutes:
+    get:
+      summary: Retrieve tracked minutes for the authenticated user.
+      operationId: getUserMinutes
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Minutes payload for the user.
+          headers:
+            date:
+              description: Server response timestamp.
+              schema:
+                type: string
+            content-type:
+              description: Response media type.
+              schema:
+                type: string
+            transfer-encoding:
+              schema:
+                type: string
+            connection:
+              schema:
+                type: string
+            server:
+              schema:
+                type: string
+            nel:
+              schema:
+                type: string
+            cf-cache-status:
+              schema:
+                type: string
+            speculation-rules:
+              schema:
+                type: string
+            report-to:
+              schema:
+                type: string
+            content-encoding:
+              schema:
+                type: string
+            cf-ray:
+              schema:
+                type: string
+            alt-svc:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  minutes:
+                    type: string
+                    example: "52560000"
+                required:
+                  - minutes
+      parameters:
+        - in: header
+          name: host
+          required: true
+          schema:
+            type: string
+            example: codetime.xbp.app
+        - in: header
+          name: x-real-ip
+          schema:
+            type: string
+            format: ipv4
+            example: "81.22.39.203"
+        - in: header
+          name: x-forwarded-for
+          schema:
+            type: string
+            example: "81.22.39.203"
+        - in: header
+          name: x-forwarded-proto
+          schema:
+            type: string
+            example: https
+        - in: header
+          name: connection
+          schema:
+            type: string
+            example: close
+        - in: header
+          name: user-agent
+          schema:
+            type: string
+            example: CodeTime Client
+        - in: header
+          name: accept-encoding
+          schema:
+            type: string
+            example: gzip, deflate, br
+        - in: header
+          name: authorization
+          schema:
+            type: string
+            example: Bearer 966c0ffd999fcc3c7f4e1e69997d40d9f0d37761bc64e807
+  /v3/users/event-log:
+    post:
+      summary: Submit editor telemetry to CodeTime.
+      operationId: postEventLog
+      security:
+        - bearerAuth: []
+      requestBody:
+        $ref: '#/components/requestBodies/eventLog'
+      responses:
+        "200":
+          description: Event stored acknowledgement.
+          headers:
+            date:
+              description: Server response timestamp.
+              schema:
+                type: string
+            content-type:
+              schema:
+                type: string
+            content-length:
+              schema:
+                type: string
+            connection:
+              schema:
+                type: string
+            server:
+              schema:
+                type: string
+            nel:
+              schema:
+                type: string
+            cf-cache-status:
+              schema:
+                type: string
+            report-to:
+              schema:
+                type: string
+            cf-ray:
+              schema:
+                type: string
+            alt-svc:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                example: {}
+      parameters:
+        - in: header
+          name: host
+          required: true
+          schema:
+            type: string
+            example: codetime.xbp.app
+        - in: header
+          name: x-real-ip
+          schema:
+            type: string
+            format: ipv4
+            example: "81.22.39.203"
+        - in: header
+          name: x-forwarded-for
+          schema:
+            type: string
+            example: "81.22.39.203"
+        - in: header
+          name: x-forwarded-proto
+          schema:
+            type: string
+            example: https
+        - in: header
+          name: connection
+          schema:
+            type: string
+            example: close
+        - in: header
+          name: content-length
+          schema:
+            type: string
+            example: "375"
+        - in: header
+          name: user-agent
+          schema:
+            type: string
+            example: CodeTime Client
+        - in: header
+          name: accept-encoding
+          schema:
+            type: string
+            example: gzip, deflate, br
+        - in: header
+          name: authorization
+          schema:
+            type: string
+            example: Bearer 966c0ffd999fcc3c7f4e1e69997d40d9f0d37761bc64e807
+        - in: header
+          name: content-type
+          schema:
+            type: string
+            example: application/json
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  requestBodies:
+    eventLog:
+      description: Event log payload that CodeTime clients send.
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              project:
+                type: string
+                example: code-time
+              language:
+                type: string
+                example: sql
+              relativeFile:
+                type: string
+                example: create_table.sql
+              absoluteFile:
+                type: string
+                example: c:\\Users\\floris\\Documents\\GitHub\\code-time\\create_table.sql
+              editor:
+                type: string
+                example: Cursor
+              platform:
+                type: string
+                example: Windows 10
+              eventTime:
+                type: integer
+                format: int64
+                example: 1769351799300
+              eventType:
+                type: string
+                example: editorChanged
+              platformArch:
+                type: string
+                example: x64
+              gitOrigin:
+                type: string
+                example: https://github.com/xylex-group/code-time.git
+              gitBranch:
+                type: string
+                example: main
+              operationType:
+                type: string
+                example: read
+            required:
+              - project
+              - language
+              - relativeFile
+              - absoluteFile
+              - editor
+              - platform
+              - eventTime
+              - eventType
+              - operationType
