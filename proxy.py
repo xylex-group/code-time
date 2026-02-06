@@ -55,8 +55,10 @@ async def lifespan(app: FastAPI):
     app.state.client = httpx.AsyncClient(timeout=30.0)
     app.state.storage = LogStorage(config.log_dir / "traffic.jsonl")
     app.state.database = DatabaseStorage(config.pg_url)
+    
     await app.state.database.initialize()
     app.state.printer = AnsiPrinter()
+    
     try:
         yield
     finally:

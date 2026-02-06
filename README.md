@@ -51,6 +51,15 @@ Point your CodeTime client (or a curl command) at `http://localhost:9492` follow
 
 - Run `psql -f create_table.sql` to create the `codetime_entries` table before starting the proxy (it now stores headers/body as `JSON` plus extracted metadata including `language`).
 - Each row stores the JSON payload plus HTTP metadata and enforces uniqueness via `row_hash`. The table now captures `client_ip`, `user_agent`, `windows_username`, `file_extension`, `operation_type`, `git_branch`, `project`, `editor`, `platform`, `event_time`, `absolute_filepath`, and `event_type`.
+- Known event types logged in `event_type`:
+  - `activateFileChanged`
+  - `editorChanged`
+  - `fileSaved`
+  - `fileAddedLine`
+  - `fileCreated`
+  - `fileEdited`
+  - `changeEditorSelection`
+  - `changeEditorVisibleRanges`
 
 ## Notes
 
