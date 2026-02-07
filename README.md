@@ -61,6 +61,13 @@ Point your CodeTime client (or a curl command) at `http://localhost:9492` follow
   - `changeEditorSelection`
   - `changeEditorVisibleRanges`
 
+## Testing
+
+- **Proxy (Python):** `pip install -r requirements-dev.txt` then `python -m pytest tests/ -v`
+- **Zed extension (Rust):** `cd extensions/zed && cargo test`
+- **VS Code extension:** `cd extensions/vscode && npm install && npm test`
+- **Neovim stub (Lua):** from repo root, `lua extensions/nvim/spec/test_init_spec.lua` (requires Lua 5.1+)
+
 ## Notes
 
 - The proxy implements the GET `/v3/users/self/minutes` and POST `/v3/users/event-log` paths (among others) because it captures everything and forwards it transparently.

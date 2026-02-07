@@ -11,7 +11,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlencode, urlparse
@@ -26,6 +26,8 @@ import uvicorn
 APP_TITLE = "CodeTime Proxy"
 DEFAULT_UPSTREAM = "https://api.codetime.dev"
 ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024  # 2 MiB
+MAX_JSON_BODY_BYTES = 512 * 1024  # 512 KiB for parse_body_json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("codetime_proxy")
@@ -41,9 +43,18 @@ class ProxyConfig:
 
 
 def load_config() -> ProxyConfig:
-    upstream = os.environ.get("CODETIME_UPSTREAM", DEFAULT_UPSTREAM).rstrip("/")
-    log_dir = Path(os.environ.get("CODETIME_LOG_DIR", "logs"))
-    pg_url = os.environ.get("PG_URL")
+    raw_upstream = (os.environ.get("CODETIME_UPSTREAM") or DEFAULT_UPSTREAM).strip().rstrip("/")
+    if not raw_upstream:
+        raw_upstream = DEFAULT_UPSTREAM
+    parsed = urlparse(raw_upstream)
+    if not parsed.scheme or not parsed.netloc:
+        logger.warning("invalid CODETIME_UPSTREAM %r, using default", raw_upstream)
+        raw_upstream = DEFAULT_UPSTREAM
+    upstream = raw_upstream
+
+    log_dir_raw = (os.environ.get("CODETIME_LOG_DIR") or "logs").strip() or "logs"
+    log_dir = Path(log_dir_raw).resolve()
+    pg_url = (os.environ.get("PG_URL") or "").strip() or None
     return ProxyConfig(upstream=upstream, log_dir=log_dir, pg_url=pg_url)
 
 
@@ -140,7 +151,7 @@ class LogEntry:
         )
         row_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return cls(
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             method=method,
             path=path,
             query=query,
@@ -181,7 +192,12 @@ class LogStorage:
 
     async def append(self, entry: LogEntry) -> None:
         async with self.lock:
-            await asyncio.to_thread(self._write_line, entry.to_json_line())
+            try:
+                await asyncio.to_thread(self._write_line, entry.to_json_line())
+            except OSError as e:
+                logger.warning("failed to write log entry: %s", e)
+            except Exception as e:
+                logger.exception("unexpected error writing log: %s", e)
 
     def _write_line(self, line: str) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -267,10 +283,12 @@ class DatabaseStorage:
             entry.absolute_filepath,
             entry.event_type,
             entry.language,
-            datetime.utcnow(),
+            datetime.now(timezone.utc),
             )
-        except Exception as exc:  # pragma: no cover
-            logger.exception("failed to insert entry into Postgres")
+        except (asyncpg.PostgresError, OSError, ValueError) as e:
+            logger.warning("failed to insert entry into Postgres: %s", e)
+        except Exception as e:  # pragma: no cover
+            logger.exception("unexpected error inserting entry: %s", e)
 
 
 class AnsiPrinter:
@@ -308,28 +326,31 @@ _JSON_SANITIZE_RE = re.compile(r"[^\x09\x0A\x0D\x20-\x7E]+")
 
 
 def extract_client_ip(headers: Mapping[str, str]) -> Optional[str]:
+    if not headers:
+        return None
     candidates = []
     for key in ("x-real-ip", "x-forwarded-for", "x-forwarded"):
         value = headers.get(key)
-        if not value:
+        if value is None or not isinstance(value, str):
             continue
-        candidates.extend(part.strip() for part in value.split(","))
+        candidates.extend(part.strip() for part in value.split(",") if part)
 
     for ip in candidates:
         if _IPV4_RE.fullmatch(ip):
             return ip
     host = headers.get("host")
-    if host and _IPV4_RE.fullmatch(host):
+    if isinstance(host, str) and _IPV4_RE.fullmatch(host):
         return host
     return None
 
 
 def extract_user_agent(headers: Mapping[str, str]) -> Optional[str]:
-    return headers.get("user-agent")
+    ua = headers.get("user-agent")
+    return ua if isinstance(ua, str) else None
 
 
 def extract_windows_username(path: Optional[str]) -> Optional[str]:
-    if not path:
+    if not path or not isinstance(path, str):
         return None
     match = re.search(r"[cC]:\\Users\\([^\\]+)\\", path)
     if match:
@@ -338,28 +359,56 @@ def extract_windows_username(path: Optional[str]) -> Optional[str]:
 
 
 def extract_file_extension(path: Optional[str]) -> Optional[str]:
-    if not path:
+    if not path or not isinstance(path, str):
         return None
     _, ext = os.path.splitext(path)
     return ext.lower() if ext else None
 
 
 def parse_body_json(body: str) -> Dict[str, Any]:
+    if not body or not isinstance(body, str):
+        return {}
+    if len(body.encode("utf-8")) > MAX_JSON_BODY_BYTES:
+        logger.debug("request body too large to parse as JSON, skipping")
+        return {}
     try:
-        return json.loads(body)
+        parsed = json.loads(body)
+        return parsed if isinstance(parsed, dict) else {}
     except json.JSONDecodeError:
         return {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _safe_str(value: Any, max_len: int = 2048) -> Optional[str]:
+    """Coerce value to string for metadata; cap length and return None for invalid."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        s = value
+    elif isinstance(value, (int, float, bool)):
+        s = str(value)
+    else:
+        return None
+    return s[:max_len] if len(s) > max_len else s
 
 
 def collect_metadata(body: str, headers: Mapping[str, str]) -> Dict[str, Any]:
     data = parse_body_json(body)
-    absolute_file = data.get("absoluteFile") or data.get("absolute_filepath")
+    if not isinstance(data, dict):
+        data = {}
+    absolute_file = _safe_str(data.get("absoluteFile") or data.get("absolute_filepath"))
     event_time_value = data.get("eventTime")
     event_time = None
     if isinstance(event_time_value, (int, float)):
         try:
-            event_time = datetime.utcfromtimestamp(event_time_value / 1000.0)
-        except Exception:
+            event_time = datetime.fromtimestamp(event_time_value / 1000.0, tz=timezone.utc)
+        except (OSError, ValueError, OverflowError):
+            event_time = None
+    elif isinstance(event_time_value, str):
+        try:
+            event_time = datetime.fromtimestamp(float(event_time_value) / 1000.0, tz=timezone.utc)
+        except (ValueError, TypeError, OverflowError):
             event_time = None
 
     return {
@@ -367,19 +416,21 @@ def collect_metadata(body: str, headers: Mapping[str, str]) -> Dict[str, Any]:
         "user_agent": extract_user_agent(headers),
         "windows_username": extract_windows_username(absolute_file),
         "file_extension": extract_file_extension(absolute_file),
-        "operation_type": data.get("operationType") or data.get("operation_type"),
-        "git_branch": data.get("gitBranch") or data.get("git_branch"),
-        "project": data.get("project"),
-        "editor": data.get("editor"),
-        "platform": data.get("platform"),
+        "operation_type": _safe_str(data.get("operationType") or data.get("operation_type"), max_len=64),
+        "git_branch": _safe_str(data.get("gitBranch") or data.get("git_branch")),
+        "project": _safe_str(data.get("project")),
+        "editor": _safe_str(data.get("editor")),
+        "platform": _safe_str(data.get("platform")),
         "event_time": event_time,
         "absolute_filepath": absolute_file,
-        "event_type": data.get("eventType") or data.get("event_type"),
-        "language": data.get("language"),
+        "event_type": _safe_str(data.get("eventType") or data.get("event_type"), max_len=64),
+        "language": _safe_str(data.get("language"), max_len=64),
     }
 
 
 def sanitize_json_text(text: str) -> str:
+    if not text or not isinstance(text, str):
+        return "{}"
     cleaned = _JSON_SANITIZE_RE.sub("", text)
     try:
         json.loads(cleaned)
@@ -389,27 +440,37 @@ def sanitize_json_text(text: str) -> str:
 
 
 def build_target_url(path: str) -> str:
-    return f"{config.upstream}/{path.lstrip('/')}"
+    safe_path = (path or "").strip().lstrip("/") or ""
+    return f"{config.upstream}/{safe_path}"
 
 
 def build_request_headers(original: Mapping[str, str]) -> Dict[str, str]:
-    sanitized = {k: v for k, v in original.items() if k.lower() != "host"}
-    netloc = urlparse(config.upstream).netloc
+    sanitized: Dict[str, str] = {}
+    for k, v in original.items():
+        if k and k.lower() == "host":
+            continue
+        if k and v is not None and isinstance(v, str):
+            sanitized[k] = v
+    netloc = urlparse(config.upstream).netloc or ""
     sanitized["host"] = netloc
     return sanitized
 
 
 def filter_response_headers(headers: Mapping[str, str]) -> Dict[str, str]:
     forbidden = {"content-encoding", "transfer-encoding", "connection", "keep-alive"}
-    return {k: v for k, v in headers.items() if k.lower() not in forbidden}
+    return {
+        k: (v if isinstance(v, str) else str(v))
+        for k, v in headers.items()
+        if k and k.lower() not in forbidden and v is not None
+    }
 
 
 @app.api_route("/{path:path}", methods=ALLOWED_METHODS)
 async def proxy(path: str, request: Request) -> Response:
-    client: Optional[httpx.AsyncClient] = getattr(app.state, "client")
     user_agent_header = request.headers.get("user-agent", "")
     if "CodeTime Client" not in user_agent_header:
         return Response(status_code=403, content=b"Unsupported client")
+    client: Optional[httpx.AsyncClient] = getattr(app.state, "client")
     storage: LogStorage = app.state.storage
     database: DatabaseStorage = app.state.database
     printer: AnsiPrinter = app.state.printer
@@ -418,20 +479,33 @@ async def proxy(path: str, request: Request) -> Response:
         raise HTTPException(status_code=503, detail="Upstream client not initialized")
 
     body = await request.body()
+    if len(body) > MAX_REQUEST_BODY_BYTES:
+        logger.warning("request body too large: %d bytes", len(body))
+        raise HTTPException(status_code=413, detail="Request body too large")
     request_body = body.decode("utf-8", "ignore") if body else ""
     params = dict(request.query_params)
 
     start = time.perf_counter()
-    upstream_response = await client.request(
-        request.method,
-        build_target_url(path),
-        headers=build_request_headers(request.headers),
-        params=params,
-        content=body,
-    )
+    try:
+        upstream_response = await client.request(
+            request.method,
+            build_target_url(path),
+            headers=build_request_headers(request.headers),
+            params=params,
+            content=body,
+        )
+    except httpx.TimeoutException as e:
+        logger.warning("upstream timeout: %s", e)
+        raise HTTPException(status_code=504, detail="Upstream timeout") from e
+    except httpx.ConnectError as e:
+        logger.warning("upstream connection error: %s", e)
+        raise HTTPException(status_code=502, detail="Upstream unreachable") from e
+    except httpx.HTTPError as e:
+        logger.exception("upstream request failed: %s", e)
+        raise HTTPException(status_code=502, detail="Upstream error") from e
     duration_ms = (time.perf_counter() - start) * 1000
 
-    raw_response_text = upstream_response.text
+    raw_response_text = upstream_response.text or ""
     sanitized_response_text = sanitize_json_text(raw_response_text)
     response_bytes = sanitized_response_text.encode("utf-8")
 

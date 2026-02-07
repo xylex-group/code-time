@@ -1,0 +1,18 @@
+id = "codetime"
+name = "CodeTime"
+version = "0.2.0"
+schema_version = 1
+authors = ["CodeTime proxy contributors"]
+description = "Fetch tracked minutes and report events to the CodeTime proxy (OpenAPI-compliant). Use /codetime_status to check configuration."
+repository = "https://github.com/xylex-group/code-time"
+
+[slash_commands.codetime_minutes]
+description = "Fetch your tracked coding minutes from the CodeTime proxy (GET /v3/users/self/minutes)"
+
+[slash_commands.codetime_report]
+description = "Report a CodeTime event: event type (with completions) and optional relative file path"
+requires_argument = true
+argument_placeholder = "eventType path/to/file"
+
+[slash_commands.codetime_status]
+description = "Show CodeTime proxy configuration (base URL and whether API key is set)"
